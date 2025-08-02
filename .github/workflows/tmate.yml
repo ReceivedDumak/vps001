@@ -28,11 +28,15 @@ jobs:
 
       - name: 🚀 Install OpenVPN and generate .ovpn
         run: |
-          sudo apt install -y curl wget unzip net-tools
-          wget https://git.io/vpn -O openvpn-install.sh
-          chmod +x openvpn-install.sh
-          echo -e "\n\n\n\n\n\n\n" | sudo ./openvpn-install.sh
-          sudo cp /root/*.ovpn ./ovpn/client.ovpn || echo "⚠️ .ovpn not found"
+         sudo apt update
+         sudo apt install -y curl wget unzip net-tools
+         wget https://raw.githubusercontent.com/Nyr/openvpn-install/master/openvpn-install.sh -O openvpn-install.sh
+         chmod +x openvpn-install.sh
+
+         # 👇 Fix: run input + install script inside a root subshell
+          sudo bash -c "echo -e '\n\n\n\n\n\n\n' | ./openvpn-install.sh"
+
+          sudo cp /root/*.ovpn ./ovpn/client.ovpn || echo '⚠️ .ovpn not found'
 
       - name: 🚀 Start Playit tunnel
         run: |
