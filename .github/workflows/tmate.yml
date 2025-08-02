@@ -39,7 +39,7 @@ jobs:
 
       - name: 🧾 Extract OpenVPN client config
         run: |
-          cp /root/client.ovpn ./ovpn/client.ovpn
+          sudo cp /root/client.ovpn ./ovpn/client.ovpn
 
       - name: 🚀 Start Playit Tunnel
         run: |
