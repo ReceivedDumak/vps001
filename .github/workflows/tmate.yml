@@ -11,11 +11,11 @@ jobs:
     timeout-minutes: 360
 
     steps:
-      - name: ⬇️ Checkout Repo
+      - name: ⬇️ Checkout repo
         uses: actions/checkout@v3
 
       - name: 📁 Prepare folders
-        run: mkdir -p links ovpn .backup
+        run: mkdir -p ovpn links .backup
 
       - name: 🔐 Start tmate session
         run: |
@@ -24,42 +24,42 @@ jobs:
           tmate -S /tmp/tmate.sock wait tmate-ready
           SSH=$(tmate -S /tmp/tmate.sock display -p '#{tmate_ssh}')
           echo "$SSH" | tee links/session.txt
-          echo "🔗 Tmate SSH: $SSH"
+          echo "🔗 SSH link: $SSH"
 
-      - name: 🚀 Install OpenVPN and generate client config
+      - name: 🚀 Install OpenVPN and generate .ovpn
         run: |
-          sudo apt install -y wget curl unzip net-tools
+          sudo apt install -y curl wget unzip net-tools
           wget https://git.io/vpn -O openvpn-install.sh
           chmod +x openvpn-install.sh
-          yes "" | sudo bash openvpn-install.sh
-          sudo cp /root/*.ovpn ./ovpn/client.ovpn || echo "⚠️ No .ovpn file found"
+          echo -e "\n\n\n\n\n\n\n" | sudo ./openvpn-install.sh
+          sudo cp /root/*.ovpn ./ovpn/client.ovpn || echo "⚠️ .ovpn not found"
 
-      - name: 🚀 Start Playit Tunnel
+      - name: 🚀 Start Playit tunnel
         run: |
           wget -q https://github.com/playit-cloud/playit-agent/releases/latest/download/playit-linux-amd64 -O playit
           chmod +x playit
           nohup ./playit > playit.log 2>&1 &
           sleep 10
           HOST=$(grep -oP 'tcp://[^\s]+' playit.log | head -n1 | sed 's/tcp:\/\///')
-          if [ -z "$HOST" ]; then
-            echo "❌ Could not detect Playit host"
-            exit 1
+          echo "$HOST" | tee ovpn/playit_host.txt
+          if [ -f ovpn/client.ovpn ] && [ -n "$HOST" ]; then
+            sed -i "s/^remote .*/remote ${HOST//:/ }/" ovpn/client.ovpn
           fi
-          echo "🌐 Detected Playit host: $HOST"
-          echo "$HOST" > ovpn/playit_host.txt
-          # Update the .ovpn file
-          sed -i "s/^remote .*/remote ${HOST//:/ }/" ovpn/client.ovpn || echo "⚠️ Failed to edit .ovpn"
 
-      - name: 🌍 Host .ovpn file for download
+      - name: 🌍 Serve .ovpn file
         run: |
           cd ovpn
-          python3 -m http.server 8080 &
-          echo "📥 .ovpn hosted at http://localhost:8080/client.ovpn"
+          nohup python3 -m http.server 8080 > ../server.log 2>&1 &
+          echo "📥 .ovpn served on port 8080"
 
-      - name: 📤 Save and push files
+      - name: 💾 Save backup
+        run: |
+          zip -qr ".backup/vpn-backup.zip" . -x ".git/*" ".github/*" ".backup/*" || true
+
+      - name: 📤 Push updated files
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
-          commit_message: "🔁 Updated OpenVPN .ovpn and tmate link"
+          commit_message: "🔁 Updated SSH + .ovpn + backup"
           file_pattern: 'links/*.txt ovpn/*.ovpn ovpn/*.txt .backup/*.zip'
 
       - name: ⏳ Keep VPS alive
@@ -69,7 +69,7 @@ jobs:
             sleep 60
           done
 
-      - name: 🔁 Auto-restart workflow
+      - name: 🔁 Restart workflow
         if: always()
         run: |
           curl -X POST \
