@@ -1,4 +1,4 @@
-name: Create VPS (Auto Restart)
+name: Create VPS with OpenVPN + Playit
 
 on:
   workflow_dispatch:
@@ -8,7 +8,7 @@ on:
 jobs:
   start-vps:
     runs-on: ubuntu-latest
-    timeout-minutes: 360  # 6 hours
+    timeout-minutes: 360
     env:
       TMATE_SERVER: nyc1.tmate.io
 
@@ -17,62 +17,69 @@ jobs:
         uses: actions/checkout@v3
 
       - name: 📁 Prepare dirs
-        run: mkdir -p links .backup
+        run: mkdir -p links .backup ovpn
 
-      - name: 💾 Restore backup (optional)
-        run: |
-          name="${{ github.event.client_payload.vps_name || 'manual-vps' }}"
-          if [ "${{ github.event.client_payload.backup }}" == "true" ]; then
-            unzip ".backup/$name.zip" -d . || echo "⚠️ No backup found."
-          fi
-
-      - name: 🔐 Start tmate session
+      - name: 🔐 Install tmate
         run: |
           sudo apt update -y && sudo apt install -y tmate
-          
-          # Start a persistent tmate session
           tmate -S /tmp/tmate.sock new-session -d
           tmate -S /tmp/tmate.sock wait tmate-ready
-
-          # Attach interactive bash shell (keeps session alive)
           tmate -S /tmp/tmate.sock new-window -n shell "bash"
-
-          # Extract SSH and web links
           SSH=$(tmate -S /tmp/tmate.sock display -p '#{tmate_ssh}')
-          WEB=$(tmate -S /tmp/tmate.sock display -p '#{tmate_web}')
+          echo "$SSH" | tee "links/session.txt"
+          echo "🔗 Tmate SSH: $SSH"
 
-          echo "🔗 SSH: $SSH"
-          echo "🌐 Web: $WEB"
+      - name: 🚀 Install OpenVPN server
+        run: |
+          wget https://git.io/vpn -O openvpn-install.sh
+          chmod +x openvpn-install.sh
+          AUTO_INSTALL=y ./openvpn-install.sh <<EOF
+          client
+          EOF
 
-          # Save link to file
-          echo "$SSH" | tee "links/${{ github.event.client_payload.vps_name || 'manual-vps' }}.txt"
+      - name: 🧾 Extract OpenVPN client config
+        run: |
+          cp /root/client.ovpn ./ovpn/client.ovpn
 
       - name: 🚀 Start Playit Tunnel
         run: |
           wget -q https://github.com/playit-cloud/playit-agent/releases/latest/download/playit-linux-amd64 -O playit
           chmod +x playit
           nohup ./playit > playit.log 2>&1 &
-          echo "✅ Playit started in background."
+          sleep 5
+          echo "✅ Playit started."
 
-      - name: 📦 Save backup
+      - name: 🧪 Wait for playit to init & edit OVPN
         run: |
-          name="${{ github.event.client_payload.vps_name || 'manual-vps' }}"
-          zip -qr ".backup/$name.zip" . -x ".git/*" ".github/*" ".backup/*" || true
+          HOST=$(grep -m 1 "playit.gg" playit.log | grep -oP 'playit\.gg:\d+')
+          if [ -z "$HOST" ]; then
+            echo "❌ Failed to detect Playit public tunnel"
+            exit 1
+          fi
+          echo "🌍 Public Host: $HOST"
+          sed -i "s/^remote .*/remote ${HOST//:/ }/" ./ovpn/client.ovpn
+          echo "$HOST" > ovpn/host.txt
 
-      - name: 📤 Push updated files
+      - name: 🌐 Host .ovpn for download
+        run: |
+          cd ovpn
+          python3 -m http.server 8080 &
+          echo "📥 OVPN URL: http://localhost:8080/client.ovpn"
+
+      - name: 📤 Save backup + push
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
-          commit_message: "🔁 Updated SSH + backup"
-          file_pattern: 'links/*.txt .backup/*.zip'
+          commit_message: "🔁 Updated VPN config + SSH link"
+          file_pattern: 'links/*.txt ovpn/*.ovpn ovpn/*.txt .backup/*.zip'
 
-      - name: ⏳ Keep VPS alive
+      - name: ⏳ Keep alive
         run: |
-          for i in $(seq 1 $((360))); do
-            echo "🟢 Running minute $i/360..."
+          for i in $(seq 1 360); do
+            echo "🟢 Minute $i/360..."
             sleep 60
           done
 
-      - name: 🔁 Restart workflow
+      - name: 🔁 Restart if finished
         if: always()
         run: |
           curl -X POST \
@@ -80,4 +87,4 @@ jobs:
             -H "Authorization: Bearer ${{ secrets.PERSONAL_ACCESS_TOKEN }}" \
             -H "Content-Type: application/json" \
             https://api.github.com/repos/${{ github.repository }}/dispatches \
-            -d '{"event_type": "create-vps", "client_payload": {"vps_name": "manual-vps", "backup": true}}'
+            -d '{"event_type": "create-vps", "client_payload": {"vps_name": "vpn-vps", "backup": true}}'
