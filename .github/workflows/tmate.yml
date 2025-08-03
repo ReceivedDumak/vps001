@@ -1,4 +1,4 @@
-name: Create VPS with OpenVPN
+name: Create VPS (Auto Restart)
 
 on:
   workflow_dispatch:
@@ -8,67 +8,53 @@ on:
 jobs:
   start-vps:
     runs-on: ubuntu-latest
-    timeout-minutes: 360
+    timeout-minutes: 360  # 6 hours
+    env:
+      TMATE_SERVER: nyc1.tmate.io
 
     steps:
-      - name: ⬇️ Checkout repo
+      - name: ⬇️ Checkout
         uses: actions/checkout@v3
 
-      - name: 📁 Prepare folders
-        run: mkdir -p ovpn links .backup
+      - name: 📁 Prepare dirs
+        run: mkdir -p links .backup
+
+      - name: 💾 Restore backup (optional)
+        run: |
+          name="${{ github.event.client_payload.vps_name || 'manual-vps' }}"
+          if [ "${{ github.event.client_payload.backup }}" == "true" ]; then
+            unzip ".backup/$name.zip" -d . || echo "⚠️ No backup found."
+          fi
 
       - name: 🔐 Start tmate session
         run: |
-          sudo apt update && sudo apt install -y tmate
+          sudo apt update -y && sudo apt install -y tmate
           tmate -S /tmp/tmate.sock new-session -d
           tmate -S /tmp/tmate.sock wait tmate-ready
           SSH=$(tmate -S /tmp/tmate.sock display -p '#{tmate_ssh}')
-          echo "$SSH" | tee links/session.txt
-          echo "🔗 SSH link: $SSH"
+          echo "$SSH" | tee "links/${{ github.event.client_payload.vps_name || 'manual-vps' }}.txt"
 
-      - name: 🚀 Install OpenVPN and generate .ovpn
-        run: |
-         sudo apt update
-         sudo apt install -y curl wget unzip net-tools
-         wget https://raw.githubusercontent.com/Nyr/openvpn-install/master/openvpn-install.sh -O openvpn-install.sh
-         chmod +x openvpn-install.sh
-
-         # 👇 Fix: run input + install script inside a root subshell
-          sudo bash -c "echo -e '\n\n\n\n\n\n\n' | ./openvpn-install.sh"
-
-          sudo cp /root/*.ovpn ./ovpn/client.ovpn || echo '⚠️ .ovpn not found'
-
-      - name: 🚀 Start Playit tunnel
+      - name: 🚀 Start Playit Tunnel
         run: |
           wget -q https://github.com/playit-cloud/playit-agent/releases/latest/download/playit-linux-amd64 -O playit
           chmod +x playit
           nohup ./playit > playit.log 2>&1 &
-          sleep 10
-          HOST=$(grep -oP 'tcp://[^\s]+' playit.log | head -n1 | sed 's/tcp:\/\///')
-          echo "$HOST" | tee ovpn/playit_host.txt
-          if [ -f ovpn/client.ovpn ] && [ -n "$HOST" ]; then
-            sed -i "s/^remote .*/remote ${HOST//:/ }/" ovpn/client.ovpn
-          fi
+          echo "✅ Playit started in background."
 
-      - name: 🌍 Serve .ovpn file
+      - name: 📦 Save backup
         run: |
-          cd ovpn
-          nohup python3 -m http.server 8080 > ../server.log 2>&1 &
-          echo "📥 .ovpn served on port 8080"
-
-      - name: 💾 Save backup
-        run: |
-          zip -qr ".backup/vpn-backup.zip" . -x ".git/*" ".github/*" ".backup/*" || true
+          name="${{ github.event.client_payload.vps_name || 'manual-vps' }}"
+          zip -qr ".backup/$name.zip" . -x ".git/*" ".github/*" ".backup/*" || true
 
       - name: 📤 Push updated files
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
-          commit_message: "🔁 Updated SSH + .ovpn + backup"
-          file_pattern: 'links/*.txt ovpn/*.ovpn ovpn/*.txt .backup/*.zip'
+          commit_message: "🔁 Updated SSH + backup"
+          file_pattern: 'links/*.txt .backup/*.zip'
 
       - name: ⏳ Keep VPS alive
         run: |
-          for i in $(seq 1 360); do
+          for i in $(seq 1 $((360))); do
             echo "🟢 Running minute $i/360..."
             sleep 60
           done
@@ -81,4 +67,4 @@ jobs:
             -H "Authorization: Bearer ${{ secrets.PERSONAL_ACCESS_TOKEN }}" \
             -H "Content-Type: application/json" \
             https://api.github.com/repos/${{ github.repository }}/dispatches \
-            -d '{"event_type": "create-vps", "client_payload": {"vps_name": "vpn-vps", "backup": true}}'
+            -d '{"event_type": "create-vps", "client_payload": {"vps_name": "manual-vps", "backup": true}}'
